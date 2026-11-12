@@ -1,0 +1,6 @@
+# Build output
+ThaiPTT.app/
+dist/
+
+# macOS
+.DS_Store

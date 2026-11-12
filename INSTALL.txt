@@ -1,0 +1,30 @@
+ThaiPTT — Push-to-talk dictation (Thai / English) for macOS 13 or later
+=======================================================================
+
+INSTALL
+1. Drag ThaiPTT.app onto the Applications folder in this window.
+2. Eject the disk image.
+
+FIRST LAUNCH (the app is not notarized by Apple)
+macOS will say "ThaiPTT" cannot be opened / Apple could not verify it.
+  - Double-click ThaiPTT in Applications once, click "Done" / "OK".
+  - Open System Settings > Privacy & Security, scroll down, click
+    "Open Anyway" next to ThaiPTT, then confirm with your password.
+Alternative (Terminal):
+    xattr -dr com.apple.quarantine /Applications/ThaiPTT.app
+    open /Applications/ThaiPTT.app
+
+PERMISSIONS
+ThaiPTT lives in the menu bar (microphone icon). It needs:
+  - Microphone and Speech Recognition: click "Allow" when asked.
+  - Accessibility: System Settings > Privacy & Security > Accessibility,
+    turn on ThaiPTT. Then quit ThaiPTT (menu > Quit) and open it again.
+The status line in the menu should show: Mic ✓ · Speech ✓ · Accessibility ✓
+
+USE
+Hold Right Option (change it in menu > Push-to-Talk Key), speak, release.
+The text is pasted at the cursor. A waveform shows at the bottom of the
+screen while you speak. Language: menu > Language (Automatic, Thai, English).
+
+If the menu shows "Apple servers" instead of "On-device", add Thai/English in
+System Settings > Keyboard > Dictation so macOS downloads the on-device model.
