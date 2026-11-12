@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>ThaiPTT</string>
+	<string>MacPTTT</string>
 	<key>CFBundleExecutable</key>
-	<string>ThaiPTT</string>
+	<string>MacPTTT</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.matee.ThaiPTT</string>
+	<string>local.matee.MacPTTT</string>
 	<key>CFBundleName</key>
-	<string>ThaiPTT</string>
+	<string>MacPTTT</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -21,8 +21,8 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>ThaiPTT listens to the microphone only while you hold the push-to-talk key.</string>
+	<string>MacPTTT listens to the microphone only while you hold the push-to-talk key.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>ThaiPTT uses macOS speech recognition to turn your speech (Thai or English) into text.</string>
+	<string>MacPTTT uses macOS speech recognition to turn your speech (Thai or English) into text.</string>
 </dict>
 </plist>

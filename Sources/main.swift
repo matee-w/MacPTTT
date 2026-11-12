@@ -1,4 +1,4 @@
-// ThaiPTT — Push-to-talk dictation สำหรับ macOS ด้วย Speech framework
+// MacPTTT (Mac Push Talk to Text) — Push-to-talk dictation สำหรับ macOS ด้วย Speech framework
 // กดปุ่มที่ตั้งไว้ค้าง (ค่าเริ่มต้น ⌥ Option ขวา) → พูด → ปล่อย → ข้อความถูกวางที่ตำแหน่งเคอร์เซอร์
 // ไม่มีเสียง feedback ตอนเริ่ม/จบ · ขณะพูดแสดงคลื่นเสียงด้านล่างกลางจอ
 
@@ -131,7 +131,7 @@ final class RecognitionPass {
                 return Transcript(localeID: localeID, text: res.bestTranscription.formattedString, confidence: conf)
             }
             let finished = (result?.isFinal ?? false) || error != nil
-            if let error { NSLog("ThaiPTT [\(localeID)]: \(error.localizedDescription)") }
+            if let error { NSLog("MacPTTT [\(localeID)]: \(error.localizedDescription)") }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let transcript { self.latest = transcript }
@@ -230,7 +230,7 @@ final class Dictator {
                 try input.__installTap(onBus: 0, bufferSize: bufferSize, format: format,
                                        error: (), block: tap)
             } catch {
-                NSLog("ThaiPTT: installTap failed: \(error)")
+                NSLog("MacPTTT: installTap failed: \(error)")
                 cleanupFailedStart()
                 return false
             }
@@ -243,7 +243,7 @@ final class Dictator {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            NSLog("ThaiPTT: audio engine start failed: \(error)")
+            NSLog("MacPTTT: audio engine start failed: \(error)")
             cleanupFailedStart()
             return false
         }
@@ -286,7 +286,7 @@ final class Dictator {
         next.finish(timeout: Config.finalResultTimeout * 2) { [weak self] t in
             guard let self, s == self.session else { return }
             let better = (best.text.isEmpty || (!t.text.isEmpty && t.confidence > best.confidence)) ? t : best
-            NSLog("ThaiPTT auto: \(best.localeID)=\(best.confidence) \(t.localeID)=\(t.confidence) → \(better.localeID)")
+            NSLog("MacPTTT auto: \(best.localeID)=\(best.confidence) \(t.localeID)=\(t.confidence) → \(better.localeID)")
             self.tryOthers(rest, best: better, audio: audio, session: s, completion)
         }
     }
@@ -526,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mic.target = self
         menu.addItem(mic)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit ThaiPTT", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit MacPTTT", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
@@ -639,7 +639,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setIcon(_ symbol: String) {
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "ThaiPTT")
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "MacPTTT")
         img?.isTemplate = true
         statusItem.button?.image = img
     }

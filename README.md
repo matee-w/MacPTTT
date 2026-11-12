@@ -1,4 +1,4 @@
-# ThaiPTT
+# MacPTTT — Mac Push Talk to Text
 
 Push-to-talk dictation บน macOS (ไทย / อังกฤษ) ใช้ Speech framework (`SFSpeechRecognizer`) ที่มากับระบบ ไม่มีเสียง feedback
 
@@ -24,10 +24,10 @@ xcode-select --install     # ถ้ายังไม่มี
 
 ## สิทธิ์ที่ต้องให้ (ครั้งแรก)
 1. Microphone และ Speech Recognition — จะมี dialog ถามเอง
-2. Accessibility — System Settings → Privacy & Security → Accessibility → เปิด ThaiPTT
+2. Accessibility — System Settings → Privacy & Security → Accessibility → เปิด MacPTTT
 3. **ปิดแล้วเปิดแอปใหม่** หลังให้ Accessibility (global key monitor จะเริ่มทำงานหลังรีสตาร์ท)
 
-> แอปเซ็นแบบ ad-hoc ทุกครั้งที่ build ใหม่ macOS จะมองเป็นแอปใหม่ ต้องลบ ThaiPTT ออกจากรายการ Accessibility แล้วเพิ่มใหม่
+> แอปเซ็นแบบ ad-hoc ทุกครั้งที่ build ใหม่ macOS จะมองเป็นแอปใหม่ ต้องลบ MacPTTT ออกจากรายการ Accessibility แล้วเพิ่มใหม่
 
 ## On-device vs Apple servers
 บรรทัดสถานะในเมนูบอกว่าใช้โมเดลบนเครื่อง ("On-device") หรือส่งเสียงไปเซิร์ฟเวอร์ Apple ("Apple servers")
