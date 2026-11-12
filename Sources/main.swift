@@ -114,17 +114,39 @@ final class RecognitionPass {
     let request = SFSpeechAudioBufferRecognitionRequest()
     private let recognizer: SFSpeechRecognizer
     private var task: SFSpeechRecognitionTask?
-    private var latest: Transcript
     private var isDone = false
     private var waiter: ((Transcript) -> Void)?
-    /// partial result: (ข้อความ, ตำแหน่งท้ายคำ [นับเป็น Character] ของทุกคำยกเว้นคำสุดท้าย)
+    /// partial result: (ข้อความทั้งหมด, ตำแหน่งท้ายคำที่ "นิ่ง" แล้ว [นับเป็น Character])
     var onPartial: ((String, [Int]) -> Void)?
+
+    // Speech บนเครื่องเริ่มประโยคใหม่หลังเงียบ ~1.5 วิ — ผลหลังจากนั้น (รวมผลสุดท้าย) มีแค่ประโยคใหม่
+    // จึงต้องสะสมประโยคที่จบแล้วไว้เอง
+    private var closedText = ""            // ประโยคที่จบแล้ว ต่อกันด้วยช่องว่าง
+    private var closedConfidences: [Float] = []
+    private var openText = ""              // ประโยคปัจจุบัน
+    private var openConfidences: [Float] = []
+    private var openBoundaries: [Int] = []
+    /// partial ล่าสุดมี timestamp (ระบบปิดประโยคแล้ว) — ยืนยันเมื่อผลถัดไปไม่ได้ต่อจากข้อความเดิม
+    private var pendingClose = false
+
+    /// ผลรวมทุกประโยค
+    var transcript: Transcript {
+        let all = (closedConfidences + openConfidences).filter { $0 > 0 }
+        let conf = all.isEmpty ? 0 : Double(all.reduce(0, +)) / Double(all.count)
+        return Transcript(localeID: localeID, text: RecognitionPass.join(closedText, openText), confidence: conf)
+    }
+
+    private struct Update {
+        let text: String
+        let boundaries: [Int]
+        let confidences: [Float]
+        let hasTimestamps: Bool
+    }
 
     init?(localeID: String) {
         guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)), r.isAvailable else { return nil }
         self.localeID = localeID
         recognizer = r
-        latest = Transcript(localeID: localeID, text: "", confidence: 0)
 
         request.shouldReportPartialResults = true
         if r.supportsOnDeviceRecognition {
@@ -133,23 +155,54 @@ final class RecognitionPass {
         if #available(macOS 13.0, *) { request.addsPunctuation = Config.addsPunctuation }
 
         task = r.recognitionTask(with: request) { [weak self] result, error in
-            let transcript = result.map { res -> Transcript in
-                let segs = res.bestTranscription.segments
-                let conf = segs.isEmpty ? 0 : segs.map { Double($0.confidence) }.reduce(0, +) / Double(segs.count)
-                return Transcript(localeID: localeID, text: res.bestTranscription.formattedString, confidence: conf)
+            let update = result.map { res -> Update in
+                let t = res.bestTranscription
+                return Update(text: t.formattedString,
+                              boundaries: RecognitionPass.wordBoundaries(t),
+                              confidences: t.segments.map(\.confidence),
+                              hasTimestamps: t.segments.contains { $0.duration > 0 })
             }
-            let boundaries = result.map { RecognitionPass.wordBoundaries($0.bestTranscription) } ?? []
             let finished = (result?.isFinal ?? false) || error != nil
             if let error { NSLog("MacPTTT [\(localeID)]: \(error.localizedDescription)") }
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let transcript {
-                    self.latest = transcript
-                    if self.waiter == nil { self.onPartial?(transcript.text, boundaries) }
+                if let update, !self.isDone {
+                    self.apply(update)
+                    if self.waiter == nil { self.reportPartial() }
                 }
                 if finished { self.isDone = true; self.fire() }
             }
         }
+    }
+
+    private func apply(_ u: Update) {
+        if u.text.isEmpty { return }
+        if pendingClose && !u.text.hasPrefix(openText) {
+            // ประโยคเดิมจบไปแล้ว นี่คือประโยคใหม่
+            closedText = RecognitionPass.join(closedText, openText)
+            closedConfidences += openConfidences
+        }
+        openText = u.text
+        openConfidences = u.confidences
+        openBoundaries = u.boundaries
+        pendingClose = u.hasTimestamps
+    }
+
+    private func reportPartial() {
+        guard let onPartial else { return }
+        var boundaries: [Int] = []
+        var offset = 0
+        if !closedText.isEmpty {
+            boundaries.append(closedText.count)
+            offset = closedText.count + (openText.isEmpty ? 0 : 1)
+            if !openText.isEmpty { boundaries.append(offset) }
+        }
+        boundaries += openBoundaries.map { $0 + offset }
+        onPartial(RecognitionPass.join(closedText, openText), boundaries)
+    }
+
+    static func join(_ a: String, _ b: String) -> String {
+        a.isEmpty ? b : b.isEmpty ? a : a + " " + b
     }
 
     /// ปิดรับเสียง แล้วรอผลสุดท้าย (หรือ timeout)
@@ -179,7 +232,7 @@ final class RecognitionPass {
         waiter = nil
         task?.cancel()
         task = nil
-        w(latest)
+        w(transcript)
     }
 }
 
@@ -308,7 +361,10 @@ final class Dictator {
         for b in audio { next.request.append(b) }
         next.finish(timeout: Config.finalResultTimeout * 2) { [weak self] t in
             guard let self, s == self.session else { return }
-            let better = (best.text.isEmpty || (!t.text.isEmpty && t.confidence > best.confidence)) ? t : best
+            // confidence = 0 แปลว่าไม่รู้ (ได้ผลจาก timeout ไม่ใช่ผลสุดท้าย) — เปลี่ยนภาษาเฉพาะเมื่ออีกภาษามั่นใจสูงจริง
+            let wins = !t.text.isEmpty && t.confidence > best.confidence
+                && (best.confidence > 0 || t.confidence >= Config.autoAcceptConfidence)
+            let better = (best.text.isEmpty || wins) ? t : best
             NSLog("MacPTTT auto: \(best.localeID)=\(best.confidence) \(t.localeID)=\(t.confidence) → \(better.localeID)")
             self.tryOthers(rest, best: better, audio: audio, session: s, completion)
         }
@@ -488,6 +544,8 @@ final class LiveTyper {
     func finish(_ final: String) {
         pauseWork?.cancel()
         pauseWork = nil
+        // ผลสุดท้ายว่าง (เช่น error/timeout) — เก็บสิ่งที่พิมพ์ไว้ ไม่ลบทิ้ง
+        guard !final.isEmpty else { return }
         let keep = LiveTyper.commonPrefixCount(typed, final)
         // Backspace ใน macOS (และเบราว์เซอร์) ลบภาษาไทยทีละ Unicode scalar — สระ/วรรณยุกต์ทีละตัว
         // จึงต้องนับเป็น scalar ไม่ใช่ Character
