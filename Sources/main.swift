@@ -81,6 +81,12 @@ enum Settings {
         set { d.set(newValue, forKey: "lastDetected") }
     }
 
+    /// พิมพ์ข้อความทีละคำขณะพูด (ปิด = วางทั้งหมดตอนปล่อยปุ่ม)
+    static var typeWhileSpeaking: Bool {
+        get { d.object(forKey: "typeWhileSpeaking") as? Bool ?? true }
+        set { d.set(newValue, forKey: "typeWhileSpeaking") }
+    }
+
     /// รายการภาษาที่จะลอง เรียงตามลำดับ
     static var candidates: [String] {
         switch language {
@@ -111,6 +117,8 @@ final class RecognitionPass {
     private var latest: Transcript
     private var isDone = false
     private var waiter: ((Transcript) -> Void)?
+    /// partial result: (ข้อความ, ตำแหน่งท้ายคำ [นับเป็น Character] ของทุกคำยกเว้นคำสุดท้าย)
+    var onPartial: ((String, [Int]) -> Void)?
 
     init?(localeID: String) {
         guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)), r.isAvailable else { return nil }
@@ -130,11 +138,15 @@ final class RecognitionPass {
                 let conf = segs.isEmpty ? 0 : segs.map { Double($0.confidence) }.reduce(0, +) / Double(segs.count)
                 return Transcript(localeID: localeID, text: res.bestTranscription.formattedString, confidence: conf)
             }
+            let boundaries = result.map { RecognitionPass.wordBoundaries($0.bestTranscription) } ?? []
             let finished = (result?.isFinal ?? false) || error != nil
             if let error { NSLog("MacPTTT [\(localeID)]: \(error.localizedDescription)") }
             DispatchQueue.main.async {
                 guard let self else { return }
-                if let transcript { self.latest = transcript }
+                if let transcript {
+                    self.latest = transcript
+                    if self.waiter == nil { self.onPartial?(transcript.text, boundaries) }
+                }
                 if finished { self.isDone = true; self.fire() }
             }
         }
@@ -152,6 +164,14 @@ final class RecognitionPass {
         waiter = nil
         task?.cancel()
         task = nil
+    }
+
+    static func wordBoundaries(_ t: SFTranscription) -> [Int] {
+        let s = t.formattedString as NSString
+        return t.segments.dropLast().map { seg in
+            let end = min(s.length, seg.substringRange.location + seg.substringRange.length)
+            return s.substring(to: end).count
+        }
     }
 
     private func fire() {
@@ -189,6 +209,8 @@ final class Dictator {
     private(set) var state: State = .idle
     /// ระดับเสียง 0…1 หลายค่าต่อ buffer (เรียกบน main thread)
     var onLevels: (([Float]) -> Void)?
+    /// partial result ของการถอดสด (เรียกบน main thread)
+    var onPartial: ((String, [Int]) -> Void)?
 
     private let engine = AVAudioEngine()
     private let recorder = BufferRecorder()
@@ -208,6 +230,7 @@ final class Dictator {
         guard let first = candidates.first, let live = RecognitionPass(localeID: first) else { return false }
         pass = live
         session += 1
+        live.onPartial = { [weak self] in self?.onPartial?($0, $1) }
 
         let req = live.request
         let rec = recorder
@@ -423,6 +446,102 @@ final class WaveformOverlay {
     }
 }
 
+// MARK: - Live typing (พิมพ์ขณะพูด)
+
+protocol TextOutput {
+    func type(_ text: String)
+    func deleteBackward(_ count: Int)
+}
+
+/// พิมพ์เฉพาะส่วนที่ "นิ่งแล้ว" ของ partial result:
+/// ต้องตรงกับ partial ครั้งก่อน และตัดที่ขอบคำโดยเว้นคำสุดท้าย (ซึ่งยังมักถูกแก้)
+/// ถ้าหยุดพูดนานพอ จะพิมพ์คำสุดท้ายด้วย · ตอนจบเทียบกับผลสุดท้ายแล้วแก้เฉพาะส่วนที่ต่าง
+final class LiveTyper {
+    static let pauseCommitDelay: TimeInterval = 0.8
+
+    private let output: TextOutput
+    private(set) var typed = ""
+    private var previous = ""
+    private var pauseWork: DispatchWorkItem?
+
+    init(output: TextOutput) { self.output = output }
+
+    func update(text: String, boundaries: [Int]) {
+        defer { previous = text }
+        pauseWork?.cancel()
+        let agree = LiveTyper.commonPrefixCount(previous, text)
+        if let cut = boundaries.last(where: { $0 <= agree }), cut > 0 {
+            commit(String(text.prefix(cut)))
+        }
+        let work = DispatchWorkItem { [weak self] in self?.commit(text) }
+        pauseWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + LiveTyper.pauseCommitDelay, execute: work)
+    }
+
+    /// ต่อท้ายเฉพาะเมื่อข้อความใหม่ยาวกว่าและขึ้นต้นด้วยสิ่งที่พิมพ์ไปแล้ว — ไม่ลบอะไรระหว่างพูด
+    private func commit(_ stable: String) {
+        guard stable.count > typed.count, stable.hasPrefix(typed) else { return }
+        output.type(String(stable.dropFirst(typed.count)))
+        typed = stable
+    }
+
+    func finish(_ final: String) {
+        pauseWork?.cancel()
+        pauseWork = nil
+        let keep = LiveTyper.commonPrefixCount(typed, final)
+        // Backspace ใน macOS (และเบราว์เซอร์) ลบภาษาไทยทีละ Unicode scalar — สระ/วรรณยุกต์ทีละตัว
+        // จึงต้องนับเป็น scalar ไม่ใช่ Character
+        let extra = String(typed.dropFirst(keep)).unicodeScalars.count
+        if extra > 0 { output.deleteBackward(extra) }
+        let rest = String(final.dropFirst(keep))
+        if !rest.isEmpty { output.type(rest) }
+        typed = final
+    }
+
+    func cancel() { pauseWork?.cancel(); pauseWork = nil }
+
+    static func commonPrefixCount(_ a: String, _ b: String) -> Int {
+        var n = 0
+        for (x, y) in zip(a, b) { guard x == y else { break }; n += 1 }
+        return n
+    }
+}
+
+/// พิมพ์ด้วย keyboard event แบบ Unicode (ไม่ผ่าน clipboard, ไม่ขึ้นกับ layout ที่ใช้อยู่)
+struct KeyboardOutput: TextOutput {
+    private let source = CGEventSource(stateID: .privateState)
+
+    func type(_ text: String) {
+        var chunk: [UniChar] = []
+        func flush() {
+            guard !chunk.isEmpty else { return }
+            for down in [true, false] {
+                guard let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
+                e.flags = [] // กันไม่ให้ปุ่ม modifier ที่กดค้าง (เช่น ⌥) ไปเปลี่ยนตัวอักษร
+                e.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                e.post(tap: .cghidEventTap)
+            }
+            chunk.removeAll()
+        }
+        for ch in text { // ไม่ตัดกลาง Character
+            let u = Array(String(ch).utf16)
+            if chunk.count + u.count > 16 { flush() }
+            chunk += u
+        }
+        flush()
+    }
+
+    func deleteBackward(_ count: Int) {
+        for _ in 0..<count {
+            for down in [true, false] {
+                let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: down)
+                e?.flags = []
+                e?.post(tap: .cghidEventTap)
+            }
+        }
+    }
+}
+
 // MARK: - Text insertion (วางผ่าน clipboard แล้วคืนค่าเดิม)
 
 enum Inserter {
@@ -475,11 +594,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let hotkeyMenu = NSMenu()
     private let languageMenu = NSMenu()
+    private let liveItem = NSMenuItem(title: "Type While Speaking", action: nil, keyEquivalent: "")
+    private var typer: LiveTyper?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         setIcon("mic")
         dictator.onLevels = { [weak self] in self?.overlay.push($0) }
+        dictator.onPartial = { [weak self] in self?.typer?.update(text: $0, boundaries: $1) }
         buildMenu()
         requestPermissions()
         installHotkey()
@@ -517,6 +639,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         languageItem.submenu = languageMenu
         menu.addItem(languageItem)
+        liveItem.action = #selector(toggleLiveTyping)
+        liveItem.target = self
+        menu.addItem(liveItem)
         menu.addItem(.separator())
 
         let ax = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
@@ -528,6 +653,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit MacPTTT", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    @objc private func toggleLiveTyping() {
+        Settings.typeWhileSpeaking.toggle()
+        updateStatus()
     }
 
     @objc private func selectHotkey(_ sender: NSMenuItem) {
@@ -565,6 +695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         for item in hotkeyMenu.items { item.state = (item.representedObject as? String) == hk.id ? .on : .off }
         for item in languageMenu.items { item.state = (item.representedObject as? String) == lang.rawValue ? .on : .off }
+        liveItem.state = Settings.typeWhileSpeaking ? .on : .off
         if let autoItem = languageMenu.items.first(where: { ($0.representedObject as? String) == LanguageMode.auto.rawValue }) {
             autoItem.title = LanguageMode.auto.title
                 + (Settings.lastDetected.map { " — last: \(LanguageMode.name(of: $0))" } ?? "")
@@ -616,10 +747,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Push-to-talk
 
     private func begin() {
+        typer = Settings.typeWhileSpeaking ? LiveTyper(output: KeyboardOutput()) : nil
         if dictator.start() {
             setIcon("mic.fill")
             overlay.show()
         } else {
+            typer = nil
             setIcon("mic.slash")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                 if self?.dictator.state == .idle { self?.setIcon("mic") }
@@ -632,9 +765,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard dictator.state == .recording else { return }
         setIcon("ellipsis.circle")
         dictator.stop { [weak self] text in
-            self?.setIcon("mic")
-            self?.updateStatus()
-            Inserter.insert(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard let self else { return }
+            self.setIcon("mic")
+            self.updateStatus()
+            let final = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let typer = self.typer {
+                // แก้ส่วนท้ายที่ต่างจากผลสุดท้าย (หรือแทนทั้งหมดถ้าโหมดอัตโนมัติเปลี่ยนภาษา)
+                typer.finish(final)
+                self.typer = nil
+            } else {
+                Inserter.insert(final)
+            }
         }
     }
 
