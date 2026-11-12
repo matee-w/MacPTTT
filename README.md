@@ -1,39 +1,63 @@
 # MacPTTT — Mac Push Talk to Text
 
-Push-to-talk dictation บน macOS (ไทย / อังกฤษ) ใช้ Speech framework (`SFSpeechRecognizer`) ที่มากับระบบ ไม่มีเสียง feedback
+**English** · [ภาษาไทย](README.th.md)
 
-## ใช้งาน
-กดปุ่ม push-to-talk ค้างไว้ (ค่าเริ่มต้น **⌥ Option ขวา**) → พูด → ปล่อย → ข้อความถูกวางที่เคอร์เซอร์ในแอปที่ใช้อยู่
-ขณะกดค้าง จะมีแถบคลื่นเสียงจากไมค์ขึ้นด้านล่างกลางจอที่เมาส์อยู่
+Push-to-talk dictation for the macOS menu bar, in Thai and English. Hold a key, speak, release: the text is pasted at the cursor in whatever app you are using. It uses Apple's built-in Speech framework (`SFSpeechRecognizer`) and makes no start/stop sounds.
 
-ไอคอนบน menu bar: 🎙 พร้อม · 🎙(ทึบ) กำลังฟัง · ⋯ กำลังประมวลผล · 🎙/ เริ่มไม่ได้
+## Features
+- **Push-to-talk** with a key you choose (Right Option by default)
+- **Live waveform** of the microphone input at the bottom-center of the screen while you speak
+- **Automatic language selection** between Thai and English, or a fixed language
+- **On-device recognition** when the Mac supports it, so no audio leaves the Mac
+- Restores your clipboard after pasting
 
-## เมนู
-- **Push-to-Talk Key** — Right Option / Left Option / Right Command / Right Control / Right Shift / Fn (Globe)
-  ถ้าใช้ Fn ให้ตั้ง System Settings → Keyboard → "Press 🌐 key to" เป็น "Do Nothing"
+## Install
+1. Download **MacPTTT-x.y.dmg** from [Releases](https://github.com/matee-w/MacPTTT/releases/latest), open it and drag **MacPTTT** to Applications.
+2. The app is not notarized by Apple, so macOS blocks the first launch. Open **System Settings → Privacy & Security** and click **Open Anyway**, or run:
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/MacPTTT.app
+   ```
+3. Grant permissions (see below).
+
+Requires macOS 13 or later. Universal app (Apple Silicon and Intel).
+
+## Permissions
+1. **Microphone** and **Speech Recognition**: click Allow when asked.
+2. **Accessibility**: System Settings → Privacy & Security → Accessibility → turn on MacPTTT. This lets the app listen for the push-to-talk key in other apps and paste with ⌘V.
+3. **Quit and reopen MacPTTT** after granting Accessibility. The global key monitor only starts at launch.
+
+The second line of the menu shows the current state, e.g. `On-device · Mic ✓ · Speech ✓ · Accessibility ✓`.
+
+## Usage
+Hold the push-to-talk key → speak → release. The text is pasted at the cursor.
+
+Menu bar icon: 🎙 ready · 🎙 (filled) listening · ⋯ processing · 🎙 (slashed) could not start
+
+## Menu
+- **Push-to-Talk Key**: Right Option, Left Option, Right Command, Right Control, Right Shift or Fn (Globe).
+  If you use Fn, set System Settings → Keyboard → "Press 🌐 key to" to "Do Nothing".
 - **Language**
-  - **Automatic (Thai / English)** — ถอดสดด้วยภาษาที่ตรวจพบล่าสุด ถ้า confidence < 0.6 จะถอดเสียงเดิมซ้ำด้วยอีกภาษาแล้วเลือกผลที่ดีกว่า
-    (Speech บนเครื่องรันสองภาษาพร้อมกันไม่ได้ จึงต้องทำทีละรอบ — เมื่อสลับภาษาจะช้าขึ้นเล็กน้อย)
-  - **Thai** / **English (US)** — บังคับภาษาเดียว
-
-## Build
-```bash
-xcode-select --install     # ถ้ายังไม่มี
-./build.sh --install       # build + ติดตั้งลง /Applications + เปิดแอป
-```
-
-## สิทธิ์ที่ต้องให้ (ครั้งแรก)
-1. Microphone และ Speech Recognition — จะมี dialog ถามเอง
-2. Accessibility — System Settings → Privacy & Security → Accessibility → เปิด MacPTTT
-3. **ปิดแล้วเปิดแอปใหม่** หลังให้ Accessibility (global key monitor จะเริ่มทำงานหลังรีสตาร์ท)
-
-> แอปเซ็นแบบ ad-hoc ทุกครั้งที่ build ใหม่ macOS จะมองเป็นแอปใหม่ ต้องลบ MacPTTT ออกจากรายการ Accessibility แล้วเพิ่มใหม่
+  - **Automatic (Thai / English)**: transcribes live in the language detected last time. If its confidence is below 0.6, the recorded audio is transcribed again in the other language and the result with higher confidence wins. On-device Speech cannot run two languages at the same time, so this is done one after the other; switching languages adds a short delay.
+  - **Thai** / **English (US)**: always use one language.
 
 ## On-device vs Apple servers
-บรรทัดสถานะในเมนูบอกว่าใช้โมเดลบนเครื่อง ("On-device") หรือส่งเสียงไปเซิร์ฟเวอร์ Apple ("Apple servers")
-ถ้าขึ้น Apple servers ลองเพิ่มภาษาใน System Settings → Keyboard → Dictation เพื่อให้ macOS ดาวน์โหลดโมเดล
+The status line shows whether recognition runs on the Mac ("On-device") or on Apple's servers ("Apple servers"). If it shows Apple servers, add the language in System Settings → Keyboard → Dictation so macOS downloads the on-device model.
 
-## ปรับแต่ง (`Sources/main.swift` → `Config`)
-- `autoAcceptConfidence` — เกณฑ์ที่โหมด Automatic ยอมรับภาษาแรกโดยไม่ลองภาษาอื่น
-- `addsPunctuation` — เติมวรรคตอนอัตโนมัติ
-- `finalResultTimeout` — เวลารอผลสุดท้ายหลังปล่อยปุ่ม
+## Build from source
+Needs Xcode or the Command Line Tools (`xcode-select --install`).
+
+```bash
+./build.sh             # build MacPTTT.app for this Mac
+./build.sh --install   # build, install to /Applications and launch
+./build.sh --dist      # universal build + dist/MacPTTT-<version>.dmg
+```
+
+> The app is ad-hoc signed, so macOS treats every rebuild as a new app. Remove MacPTTT from the Accessibility list and add it again after each rebuild.
+
+## Configuration (`Sources/main.swift` → `Config`)
+- `autoAcceptConfidence`: confidence at which Automatic mode accepts the first language without trying the other
+- `addsPunctuation`: automatic punctuation
+- `finalResultTimeout`: how long to wait for the final result after releasing the key
+
+## License
+[MIT](LICENSE)
