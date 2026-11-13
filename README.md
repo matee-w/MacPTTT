@@ -66,7 +66,6 @@ Menu bar icon (a speech bubble turning sound into text): outline = ready · fill
 | เครื่องหมายตกใจ | ! |
 | เครื่องหมายจุด / มหัพภาค | . |
 | เครื่องหมายคำพูดเปิด / เครื่องหมายคำพูดปิด | “ ” |
-| ขึ้นบรรทัดใหม่ | new line |
 | ย่อหน้าใหม่ | new paragraph |
 | ไปยาลน้อย | ฯ |
 | วงเล็บเปิด / วงเล็บปิด | ( ) |
@@ -74,7 +73,7 @@ Menu bar icon (a speech bubble turning sound into text): outline = ready · fill
 | จุลภาค | , |
 | เว้นวรรค | space |
 
-macOS already converts "เครื่องหมายคำถาม", "เครื่องหมายตกใจ" and "วงเล็บเปิด/ปิด" itself. The Thai recognizer often drops the words "บรรทัดใหม่" before MacPTTT sees them, so "ขึ้นบรรทัดใหม่" may not work; use "ย่อหน้าใหม่" for a line break if it does not.
+macOS already converts "เครื่องหมายคำถาม", "เครื่องหมายตกใจ" and "วงเล็บเปิด/ปิด" itself.
 
 ## Offline (on-device models)
 MacPTTT only uses the speech models stored on the Mac. It never falls back to Apple's servers, so it works without internet. If a language has no on-device model, the menu shows **⚠︎ No on-device model for …**. Click it and add the language under **Keyboard → Dictation** so macOS downloads the model.
