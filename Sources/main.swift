@@ -723,6 +723,13 @@ struct KeyboardOutput: TextOutput {
             chunk.removeAll()
         }
         for ch in text { // ไม่ตัดกลาง Character
+            if ch.isNewline {
+                // ขึ้นบรรทัดต้องกด Return ทีละครั้ง: ถ้าส่ง "\n\n" ใน event เดียว แอปขึ้นบรรทัดให้แค่ครั้งเดียว
+                // แล้วจำนวนตัวอักษรที่จำไว้จะไม่ตรง → ตอนลบแก้จะลบเกินเข้าไปในบรรทัดก่อนหน้า
+                flush()
+                press(CGKeyCode(kVK_Return))
+                continue
+            }
             let u = Array(String(ch).utf16)
             if chunk.count + u.count > 16 { flush() }
             chunk += u
@@ -731,13 +738,15 @@ struct KeyboardOutput: TextOutput {
     }
 
     func deleteBackward(_ count: Int) {
-        for _ in 0..<count {
-            for down in [true, false] {
-                let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: down)
-                e?.flags = []
-                SyntheticEvent.mark(e)
-                e?.post(tap: .cghidEventTap)
-            }
+        for _ in 0..<count { press(CGKeyCode(kVK_Delete)) }
+    }
+
+    private func press(_ key: CGKeyCode) {
+        for down in [true, false] {
+            let e = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
+            e?.flags = []
+            SyntheticEvent.mark(e)
+            e?.post(tap: .cghidEventTap)
         }
     }
 }
