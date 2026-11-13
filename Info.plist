@@ -6,6 +6,8 @@
 	<string>MacPTTT</string>
 	<key>CFBundleExecutable</key>
 	<string>MacPTTT</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>local.matee.MacPTTT</string>
 	<key>CFBundleName</key>

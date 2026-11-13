@@ -15,16 +15,22 @@ Alternative (Terminal):
     open /Applications/MacPTTT.app
 
 PERMISSIONS
-MacPTTT lives in the menu bar (microphone icon). It needs:
+MacPTTT lives in the menu bar (speech bubble icon). It needs:
   - Microphone and Speech Recognition: click "Allow" when asked.
   - Accessibility: System Settings > Privacy & Security > Accessibility,
     turn on MacPTTT. Then quit MacPTTT (menu > Quit) and open it again.
-The status line in the menu should show: Mic ✓ · Speech ✓ · Accessibility ✓
+The status line in the menu should show: Offline · Mic ✓ · Speech ✓ · Accessibility ✓
 
 USE
-Hold Right Option (change it in menu > Push-to-Talk Key), speak, release.
-The text is pasted at the cursor. A waveform shows at the bottom of the
-screen while you speak. Language: menu > Language (Automatic, Thai, English).
+Hold Left Option (change it in menu > Push-to-Talk Key) and speak. The text
+is typed at the cursor as you talk; release the key when you are done.
+A waveform shows at the bottom of the screen while you speak.
+Language: menu > Language (Automatic, Thai, English).
+Punctuation: automatic, or say e.g. "comma", "new line" / Thai "ขึ้นบรรทัด",
+"ไม้ยมก" (menu > Punctuation > Show Voice Commands).
+MacPTTT starts automatically at login (menu > Launch at Login).
 
-If the menu shows "Apple servers" instead of "On-device", add Thai/English in
-System Settings > Keyboard > Dictation so macOS downloads the on-device model.
+OFFLINE
+MacPTTT only uses on-device speech models and works without internet.
+If the menu shows "No on-device model", add Thai/English in
+System Settings > Keyboard > Dictation so macOS downloads the model.

@@ -7,6 +7,7 @@ import Speech
 import AVFoundation
 import ApplicationServices
 import Carbon.HIToolbox
+import ServiceManagement
 
 // MARK: - Config
 
@@ -17,8 +18,8 @@ enum Config {
     static let autoAcceptConfidence = 0.6
     /// คืนค่า clipboard เดิมหลังวางข้อความ (วินาที)
     static let restoreClipboardDelay: TimeInterval = 0.6
-    /// เติมเครื่องหมายวรรคตอนอัตโนมัติ (macOS 13+)
-    static let addsPunctuation = true
+    /// กดปุ่มอื่นร่วมภายในช่วงนี้ (เช่น ⌥+คีย์ลัด) = ยกเลิก ไม่ใช่การพูด · แสดงคลื่นเสียงหลังกดค้างเกินนี้
+    static let overlayDelay: TimeInterval = 0.15
 }
 
 // MARK: - Settings (เก็บใน UserDefaults)
@@ -30,16 +31,23 @@ struct Hotkey {
     /// device-dependent modifier bit — แยกซ้าย/ขวาได้ ไม่สับสนเมื่อกดอีกข้างค้างอยู่
     let mask: UInt
 
-    static let all: [Hotkey] = [
-        Hotkey(id: "rightOption",  title: "Right Option ⌥",  keyCode: 61, mask: 0x40),
+    /// ปุ่มฝั่งซ้าย (กดด้วยมือซ้ายได้สะดวก)
+    static let left: [Hotkey] = [
         Hotkey(id: "leftOption",   title: "Left Option ⌥",   keyCode: 58, mask: 0x20),
-        Hotkey(id: "rightCommand", title: "Right Command ⌘", keyCode: 54, mask: 0x10),
-        Hotkey(id: "rightControl", title: "Right Control ⌃", keyCode: 62, mask: 0x2000),
-        Hotkey(id: "rightShift",   title: "Right Shift ⇧",   keyCode: 60, mask: 0x04),
+        Hotkey(id: "leftControl",  title: "Left Control ⌃",  keyCode: 59, mask: 0x01),
+        Hotkey(id: "leftCommand",  title: "Left Command ⌘",  keyCode: 55, mask: 0x08),
+        Hotkey(id: "leftShift",    title: "Left Shift ⇧",    keyCode: 56, mask: 0x02),
         Hotkey(id: "fn",           title: "Fn / Globe 🌐",   keyCode: 63,
                mask: NSEvent.ModifierFlags.function.rawValue),
     ]
-    static let `default` = all[0]
+    static let right: [Hotkey] = [
+        Hotkey(id: "rightOption",  title: "Right Option ⌥",  keyCode: 61, mask: 0x40),
+        Hotkey(id: "rightCommand", title: "Right Command ⌘", keyCode: 54, mask: 0x10),
+        Hotkey(id: "rightControl", title: "Right Control ⌃", keyCode: 62, mask: 0x2000),
+        Hotkey(id: "rightShift",   title: "Right Shift ⇧",   keyCode: 60, mask: 0x04),
+    ]
+    static let all = left + right
+    static let `default` = left[0]
 }
 
 enum LanguageMode: String, CaseIterable {
@@ -87,16 +95,121 @@ enum Settings {
         set { d.set(newValue, forKey: "typeWhileSpeaking") }
     }
 
-    /// รายการภาษาที่จะลอง เรียงตามลำดับ
+    /// ให้ Speech เติมเครื่องหมายวรรคตอนเอง (macOS 13+)
+    static var autoPunctuation: Bool {
+        get { d.object(forKey: "autoPunctuation") as? Bool ?? true }
+        set { d.set(newValue, forKey: "autoPunctuation") }
+    }
+
+    /// แปลงคำสั่งเสียงภาษาไทย เช่น "ขึ้นบรรทัด", "ไม้ยมก" เป็นสัญลักษณ์
+    static var voiceCommands: Bool {
+        get { d.object(forKey: "voiceCommands") as? Bool ?? true }
+        set { d.set(newValue, forKey: "voiceCommands") }
+    }
+
+    /// ตั้งค่าเปิดเมื่อ login แล้วหรือยัง (ทำครั้งแรกครั้งเดียว ต่อจากนั้นตามที่ผู้ใช้เลือก)
+    static var didSetUpLoginItem: Bool {
+        get { d.bool(forKey: "didSetUpLoginItem") }
+        set { d.set(newValue, forKey: "didSetUpLoginItem") }
+    }
+
+    /// รายการภาษาที่จะลอง เรียงตามลำดับ — เฉพาะภาษาที่มีโมเดลบนเครื่อง (ทำงานแบบ offline เท่านั้น)
     static var candidates: [String] {
         switch language {
         case .auto:
-            let first = lastDetected.flatMap { LanguageMode.autoCandidates.contains($0) ? $0 : nil }
-                ?? LanguageMode.thai.rawValue
-            return [first] + LanguageMode.autoCandidates.filter { $0 != first }
+            let available = LanguageMode.autoCandidates.filter(OnDevice.isAvailable)
+            let first = lastDetected.flatMap { available.contains($0) ? $0 : nil } ?? available.first
+            guard let first else { return [] }
+            return [first] + available.filter { $0 != first }
         case let fixed:
-            return [fixed.rawValue]
+            return OnDevice.isAvailable(fixed.rawValue) ? [fixed.rawValue] : []
         }
+    }
+}
+
+/// ใช้เฉพาะโมเดลบนเครื่อง — ไม่ส่งเสียงออกไปที่เซิร์ฟเวอร์ และไม่ต้องต่อเน็ต
+enum OnDevice {
+    static func isAvailable(_ localeID: String) -> Bool {
+        SFSpeechRecognizer(locale: Locale(identifier: localeID))?.supportsOnDeviceRecognition ?? false
+    }
+
+    /// ภาษาที่เลือกไว้แต่ยังไม่มีโมเดลบนเครื่อง
+    static var missing: [String] {
+        let wanted = Settings.language == .auto ? LanguageMode.autoCandidates : [Settings.language.rawValue]
+        return wanted.filter { !isAvailable($0) }
+    }
+}
+
+// MARK: - Voice commands (เครื่องหมายวรรคตอนด้วยเสียง)
+
+/// คำสั่งเสียงภาษาไทย — ภาษาอังกฤษ Speech แปลงให้เองอยู่แล้ว ("comma", "new line", "question mark" ฯลฯ)
+/// คำที่เลือกคือคำที่ทดสอบแล้วว่าตัวถอดความไทยบนเครื่องส่งออกมาเป็นข้อความ
+/// ("เว้นวรรค" และ "บรรทัดใหม่" ถูกตัวถอดความกลืนหายไปเอง จึงใช้ไม่ได้)
+enum VoiceCommands {
+    static let table: [(phrase: String, symbol: String, label: String)] = [
+        ("ย่อหน้าใหม่", "\n\n", "new paragraph"),
+        ("ขึ้นบรรทัดใหม่", "\n", "new line"),
+        ("ขึ้นบรรทัด", "\n", "new line"),
+        ("วรรคตอน", "วรรคตอน", ""),          // คำปกติ — กันไม่ให้ "วรรค" ข้างในถูกแปลง
+        ("วรรค", " ", "space"),
+        ("ไม้ยมก", "ๆ", "ๆ"),
+        ("ไปยาลน้อย", "ฯ", "ฯ"),
+        ("ไปยานน้อย", "ฯ", ""),               // ตัวถอดความมักได้ยินเป็นแบบนี้
+        ("จุลภาค", ",", ","),
+        ("มหัพภาค", ".", "."),
+        ("เครื่องหมายจุด", ".", "."),
+        ("เครื่องหมายคำถาม", "?", "?"),
+        ("เครื่องหมายตกใจ", "!", "!"),
+        ("เปิดวงเล็บ", "(", "("),
+        ("ปิดวงเล็บ", ")", ")"),
+        ("เปิดอัญประกาศ", "\u{201C}", "\u{201C}"),
+        ("ปิดอัญประกาศ", "\u{201D}", "\u{201D}"),
+    ].sorted { $0.phrase.count > $1.phrase.count }
+
+    /// สัญลักษณ์ที่ไม่ควรมีช่องว่างข้างหน้า / ข้างหลัง
+    private static let noSpaceBefore: Set<Character> = [",", ".", "?", "!", ")", "\u{201D}", "ๆ", "ฯ", "\n"]
+    private static let noSpaceAfter: Set<Character> = ["(", "\u{201C}", "\n"]
+    private static let spaceAfter: Set<Character> = [",", ".", "?", "!", ")", "\u{201D}"]
+
+    static func apply(_ text: String) -> String {
+        guard Settings.voiceCommands else { return text }
+        var out = ""
+        var i = text.startIndex
+        scan: while i < text.endIndex {
+            for c in table where text[i...].hasPrefix(c.phrase) {
+                if c.phrase != c.symbol, let first = c.symbol.first {
+                    if noSpaceBefore.contains(first) { while out.last == " " { out.removeLast() } }
+                    out += c.symbol
+                    i = text.index(i, offsetBy: c.phrase.count)
+                    if noSpaceAfter.contains(c.symbol.last!) || c.symbol == " " {
+                        while i < text.endIndex, text[i] == " " { i = text.index(after: i) }
+                    } else if spaceAfter.contains(first), i < text.endIndex,
+                              !text[i].isWhitespace, !noSpaceBefore.contains(text[i]) {
+                        out += " " // "เล่นกัน, แล้ว"
+                    }
+                } else {
+                    out += c.phrase
+                    i = text.index(i, offsetBy: c.phrase.count)
+                }
+                continue scan
+            }
+            out.append(text[i])
+            i = text.index(after: i)
+        }
+        return out
+    }
+
+    /// จำนวนตัวอักษรท้ายข้อความที่อาจเป็นต้นคำสั่งที่ยังพูดไม่จบ (เช่น "เปิดวง") — ยังไม่ควรพิมพ์
+    static func pendingSuffix(_ text: String) -> Int {
+        guard Settings.voiceCommands else { return 0 }
+        var best = 0
+        for c in table where c.phrase != c.symbol {
+            let p = Array(c.phrase)
+            for len in stride(from: p.count - 1, through: 3, by: -1) where len > best {
+                if text.hasSuffix(String(p[0..<len])) { best = len; break }
+            }
+        }
+        return best
     }
 }
 
@@ -144,15 +257,15 @@ final class RecognitionPass {
     }
 
     init?(localeID: String) {
-        guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)), r.isAvailable else { return nil }
+        // ใช้เฉพาะโมเดลบนเครื่อง: ไม่ต้องต่อเน็ต และเสียงไม่ถูกส่งออกไป — ไม่มีโมเดล = ไม่ทำงาน (ไม่ fallback ไปเซิร์ฟเวอร์)
+        guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)),
+              r.supportsOnDeviceRecognition else { return nil }
         self.localeID = localeID
         recognizer = r
 
         request.shouldReportPartialResults = true
-        if r.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true // ใช้โมเดลบนเครื่อง ไม่ส่งเสียงออกไป
-        }
-        if #available(macOS 13.0, *) { request.addsPunctuation = Config.addsPunctuation }
+        request.requiresOnDeviceRecognition = true
+        if #available(macOS 13.0, *) { request.addsPunctuation = Settings.autoPunctuation }
 
         task = r.recognitionTask(with: request) { [weak self] result, error in
             let update = result.map { res -> Update in
@@ -377,6 +490,16 @@ final class Dictator {
         completion(t.text)
     }
 
+    /// ยกเลิกการอัดโดยไม่ส่งข้อความ (เช่น ปุ่มที่กดค้างเป็นส่วนหนึ่งของคีย์ลัด)
+    func cancel() {
+        guard state == .recording else { return }
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
+        session += 1
+        cleanupFailedStart()
+        state = .idle
+    }
+
     private func cleanupFailedStart() {
         pass?.cancel()
         pass = nil
@@ -527,17 +650,29 @@ final class LiveTyper {
         pauseWork?.cancel()
         let agree = LiveTyper.commonPrefixCount(previous, text)
         if let cut = boundaries.last(where: { $0 <= agree }), cut > 0 {
-            commit(String(text.prefix(cut)))
+            var stable = String(text.prefix(cut))
+            // ท้ายข้อความอาจเป็นคำสั่งเสียงที่ยังพูดไม่จบ (เช่น "เปิดวง…") — รอก่อน
+            stable.removeLast(VoiceCommands.pendingSuffix(stable))
+            commit(VoiceCommands.apply(stable))
         }
-        let work = DispatchWorkItem { [weak self] in self?.commit(text) }
+        let work = DispatchWorkItem { [weak self] in self?.commit(VoiceCommands.apply(text)) }
         pauseWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + LiveTyper.pauseCommitDelay, execute: work)
     }
 
-    /// ต่อท้ายเฉพาะเมื่อข้อความใหม่ยาวกว่าและขึ้นต้นด้วยสิ่งที่พิมพ์ไปแล้ว — ไม่ลบอะไรระหว่างพูด
+    /// แก้ส่วนท้ายระหว่างพูดได้ไม่เกินกี่ตัวอักษร (เช่น "ขึ้น" → "ขึ้นบรรทัด" = ขึ้นบรรทัดใหม่)
+    static let maxLiveCorrection = 12
+
+    /// พิมพ์ส่วนที่เพิ่ม — ถ้าท้ายที่พิมพ์ไปแล้วไม่ตรง (สั้นๆ) ลบแล้วพิมพ์ใหม่ ไม่ต้องรอปล่อยปุ่ม
     private func commit(_ stable: String) {
-        guard stable.count > typed.count, stable.hasPrefix(typed) else { return }
-        output.type(String(stable.dropFirst(typed.count)))
+        let keep = LiveTyper.commonPrefixCount(typed, stable)
+        guard stable.count > keep else { return }
+        let wrong = typed.count - keep
+        if wrong > 0 {
+            guard wrong <= LiveTyper.maxLiveCorrection else { return } // ต่างมาก — รอผลสุดท้าย
+            output.deleteBackward(String(typed.dropFirst(keep)).unicodeScalars.count)
+        }
+        output.type(String(stable.dropFirst(keep)))
         typed = stable
     }
 
@@ -565,6 +700,13 @@ final class LiveTyper {
     }
 }
 
+/// ติดป้ายให้ keyboard event ที่แอปสร้างเอง เพื่อไม่ให้ตัวตรวจ "กดปุ่มอื่นระหว่างพูด" นับรวม
+enum SyntheticEvent {
+    private static let marker: Int64 = 0x4D50_5454 // "MPTT"
+    static func mark(_ e: CGEvent?) { e?.setIntegerValueField(.eventSourceUserData, value: marker) }
+    static func isOurs(_ e: NSEvent) -> Bool { e.cgEvent?.getIntegerValueField(.eventSourceUserData) == marker }
+}
+
 /// พิมพ์ด้วย keyboard event แบบ Unicode (ไม่ผ่าน clipboard, ไม่ขึ้นกับ layout ที่ใช้อยู่)
 struct KeyboardOutput: TextOutput {
     private let source = CGEventSource(stateID: .privateState)
@@ -577,6 +719,7 @@ struct KeyboardOutput: TextOutput {
                 guard let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 e.flags = [] // กันไม่ให้ปุ่ม modifier ที่กดค้าง (เช่น ⌥) ไปเปลี่ยนตัวอักษร
                 e.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                SyntheticEvent.mark(e)
                 e.post(tap: .cghidEventTap)
             }
             chunk.removeAll()
@@ -594,6 +737,7 @@ struct KeyboardOutput: TextOutput {
             for down in [true, false] {
                 let e = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Delete), keyDown: down)
                 e?.flags = []
+                SyntheticEvent.mark(e)
                 e?.post(tap: .cghidEventTap)
             }
         }
@@ -627,6 +771,8 @@ enum Inserter {
         let up = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: false)
         down?.flags = .maskCommand
         up?.flags = .maskCommand
+        SyntheticEvent.mark(down)
+        SyntheticEvent.mark(up)
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
 
@@ -639,28 +785,118 @@ enum Inserter {
     }
 }
 
+// MARK: - Menu bar icon (ฟองคำพูด: คลื่นเสียง → บรรทัดข้อความ เหมือนไอคอนแอป)
+
+enum MenuBarIcon {
+    case idle, listening, processing, unavailable
+
+    var image: NSImage? {
+        switch self {
+        case .idle: return MenuBarIcon.bubble(filled: false)
+        case .listening: return MenuBarIcon.bubble(filled: true)
+        case .processing: return MenuBarIcon.symbol("ellipsis.bubble")
+        case .unavailable: return MenuBarIcon.symbol("exclamationmark.bubble")
+        }
+    }
+
+    private static func symbol(_ name: String) -> NSImage? {
+        let img = NSImage(systemSymbolName: name, accessibilityDescription: "MacPTTT")
+        img?.isTemplate = true
+        return img
+    }
+
+    private static func bubble(filled: Bool) -> NSImage {
+        let img = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
+            let ctx = NSGraphicsContext.current!
+            NSColor.black.setFill()
+            // ฟอง + หาง
+            let outer = NSBezierPath(roundedRect: NSRect(x: 1, y: 4.5, width: 16, height: 11.5), xRadius: 4, yRadius: 4)
+            let tail = NSBezierPath()
+            tail.move(to: NSPoint(x: 3.5, y: 5))
+            tail.line(to: NSPoint(x: 2.5, y: 1.5))
+            tail.line(to: NSPoint(x: 7.5, y: 5))
+            tail.close()
+            outer.append(tail)
+            outer.fill()
+            ctx.compositingOperation = .destinationOut
+            if !filled {
+                NSBezierPath(roundedRect: NSRect(x: 2.4, y: 5.9, width: 13.2, height: 8.7), xRadius: 2.8, yRadius: 2.8).fill()
+                ctx.compositingOperation = .sourceOver
+            }
+            // คลื่นเสียง (ซ้าย) + บรรทัดข้อความ (ขวา): สีดำบนฟองโปร่ง / เจาะทะลุบนฟองทึบ
+            let midY: CGFloat = 10.25
+            for (i, h) in [CGFloat(2.6), 5.4, 3.6].enumerated() {
+                let x = 4.2 + CGFloat(i) * 2.0
+                NSBezierPath(roundedRect: NSRect(x: x, y: midY - h / 2, width: 1.25, height: h), xRadius: 0.6, yRadius: 0.6).fill()
+            }
+            for (i, w) in [CGFloat(4.2), 3.4, 2.4].enumerated() {
+                let y = midY + 1.9 - CGFloat(i) * 1.9 - 0.6
+                NSBezierPath(roundedRect: NSRect(x: 10.8, y: y, width: w, height: 1.2), xRadius: 0.6, yRadius: 0.6).fill()
+            }
+            ctx.compositingOperation = .sourceOver
+            return true
+        }
+        img.isTemplate = true
+        img.accessibilityDescription = "MacPTTT"
+        return img
+    }
+}
+
+// MARK: - Launch at login
+
+enum LoginItem {
+    static var status: SMAppService.Status { SMAppService.mainApp.status }
+
+    static func set(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSLog("MacPTTT: login item \(enabled ? "register" : "unregister") failed: \(error)")
+        }
+    }
+
+    /// เปิดเมื่อ login เป็นค่าเริ่มต้น — ตั้งให้ครั้งแรกที่เปิดจาก /Applications ครั้งเดียว ต่อจากนั้นตามที่ผู้ใช้เลือก
+    static func setUpOnFirstLaunch() {
+        guard !Settings.didSetUpLoginItem, Bundle.main.bundlePath.hasPrefix("/Applications/") else { return }
+        Settings.didSetUpLoginItem = true
+        set(true)
+    }
+}
+
 // MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let dictator = Dictator()
     private let overlay = WaveformOverlay()
-    private var keyIsDown = false
     private var monitors: [Any] = []
+
+    /// สถานะปุ่มที่กดค้าง
+    private var keyIsDown = false
+    private var pressedAt = Date.distantPast
+    /// ถูกยกเลิกเพราะกดปุ่มอื่นร่วม — ไม่ต้องทำอะไรตอนปล่อย
+    private var cancelled = false
+    private var pressToken = 0
+    private var typer: LiveTyper?
 
     private let hintItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let statusMenuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let modelItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let hotkeyMenu = NSMenu()
     private let languageMenu = NSMenu()
+    private let punctuationMenu = NSMenu()
     private let liveItem = NSMenuItem(title: "Type While Speaking", action: nil, keyEquivalent: "")
-    private var typer: LiveTyper?
+    private let autoPunctItem = NSMenuItem(title: "Automatic Punctuation", action: nil, keyEquivalent: "")
+    private let voiceCmdItem = NSMenuItem(title: "Thai Voice Commands", action: nil, keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        setIcon("mic")
+        setIcon(.idle)
         dictator.onLevels = { [weak self] in self?.overlay.push($0) }
         dictator.onPartial = { [weak self] in self?.typer?.update(text: $0, boundaries: $1) }
         buildMenu()
+        LoginItem.setUpOnFirstLaunch()
         requestPermissions()
         installHotkey()
         updateStatus()
@@ -670,52 +906,102 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Menu
 
+    private func item(_ title: String, _ action: Selector, _ represented: Any? = nil) -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        i.target = self
+        i.representedObject = represented
+        return i
+    }
+
+    private func header(_ title: String) -> NSMenuItem {
+        if #available(macOS 14.0, *) { return .sectionHeader(title: title) }
+        return NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    }
+
     private func buildMenu() {
         let menu = NSMenu()
         menu.delegate = self
         menu.addItem(hintItem)
         menu.addItem(statusMenuItem)
+        modelItem.target = self
+        modelItem.action = #selector(openDictationSettings)
+        menu.addItem(modelItem)
         menu.addItem(.separator())
 
-        for hk in Hotkey.all {
-            let item = NSMenuItem(title: hk.title, action: #selector(selectHotkey(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = hk.id
-            hotkeyMenu.addItem(item)
-        }
+        hotkeyMenu.addItem(header("Left Hand"))
+        for hk in Hotkey.left { hotkeyMenu.addItem(item(hk.title, #selector(selectHotkey(_:)), hk.id)) }
+        hotkeyMenu.addItem(.separator())
+        hotkeyMenu.addItem(header("Right Hand"))
+        for hk in Hotkey.right { hotkeyMenu.addItem(item(hk.title, #selector(selectHotkey(_:)), hk.id)) }
         let hotkeyItem = NSMenuItem(title: "Push-to-Talk Key", action: nil, keyEquivalent: "")
         hotkeyItem.submenu = hotkeyMenu
         menu.addItem(hotkeyItem)
 
         for mode in LanguageMode.allCases {
-            let item = NSMenuItem(title: mode.title, action: #selector(selectLanguage(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = mode.rawValue
-            languageMenu.addItem(item)
+            languageMenu.addItem(item(mode.title, #selector(selectLanguage(_:)), mode.rawValue))
             if mode == .auto { languageMenu.addItem(.separator()) }
         }
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         languageItem.submenu = languageMenu
         menu.addItem(languageItem)
-        liveItem.action = #selector(toggleLiveTyping)
+
+        autoPunctItem.target = self
+        autoPunctItem.action = #selector(toggleAutoPunctuation)
+        voiceCmdItem.target = self
+        voiceCmdItem.action = #selector(toggleVoiceCommands)
+        punctuationMenu.addItem(autoPunctItem)
+        punctuationMenu.addItem(voiceCmdItem)
+        punctuationMenu.addItem(.separator())
+        punctuationMenu.addItem(item("Show Voice Commands…", #selector(showVoiceCommands)))
+        let punctItem = NSMenuItem(title: "Punctuation", action: nil, keyEquivalent: "")
+        punctItem.submenu = punctuationMenu
+        menu.addItem(punctItem)
+
         liveItem.target = self
+        liveItem.action = #selector(toggleLiveTyping)
         menu.addItem(liveItem)
         menu.addItem(.separator())
 
-        let ax = NSMenuItem(title: "Open Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
-        ax.target = self
-        menu.addItem(ax)
-        let mic = NSMenuItem(title: "Open Microphone Settings…", action: #selector(openMicrophone), keyEquivalent: "")
-        mic.target = self
-        menu.addItem(mic)
+        loginItem.target = self
+        loginItem.action = #selector(toggleLogin)
+        menu.addItem(loginItem)
+        menu.addItem(item("Open Accessibility Settings…", #selector(openAccessibility)))
+        menu.addItem(item("Open Microphone Settings…", #selector(openMicrophone)))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit MacPTTT", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
-    @objc private func toggleLiveTyping() {
-        Settings.typeWhileSpeaking.toggle()
+    @objc private func toggleLiveTyping() { Settings.typeWhileSpeaking.toggle(); updateStatus() }
+    @objc private func toggleAutoPunctuation() { Settings.autoPunctuation.toggle(); updateStatus() }
+    @objc private func toggleVoiceCommands() { Settings.voiceCommands.toggle(); updateStatus() }
+
+    @objc private func toggleLogin() {
+        switch LoginItem.status {
+        case .enabled: LoginItem.set(false)
+        case .requiresApproval: SMAppService.openSystemSettingsLoginItems()
+        default: LoginItem.set(true)
+        }
+        Settings.didSetUpLoginItem = true
         updateStatus()
+    }
+
+    @objc private func showVoiceCommands() {
+        let thai = VoiceCommands.table.filter { !$0.label.isEmpty }
+            .map { "\($0.phrase)  →  \($0.label)" }
+            .joined(separator: "\n")
+        let alert = NSAlert()
+        alert.messageText = "Voice Commands"
+        alert.informativeText = """
+        Thai (say the word while dictating):
+        \(thai)
+
+        English is handled by macOS: say "comma", "period", "question mark", \
+        "exclamation point", "colon", "semicolon", "open/close parenthesis", \
+        "new line", "new paragraph".
+        """
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     @objc private func selectHotkey(_ sender: NSMenuItem) {
@@ -732,7 +1018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateStatus()
     }
 
-    // MARK: Permissions
+    // MARK: Permissions & status
 
     private func requestPermissions() {
         SFSpeechRecognizer.requestAuthorization { _ in
@@ -741,7 +1027,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AVCaptureDevice.requestAccess(for: .audio) { _ in
             DispatchQueue.main.async { self.updateStatus() }
         }
-        // ต้องมี Accessibility เพื่อฟังปุ่มแบบ global และส่ง ⌘V
+        // ต้องมี Accessibility เพื่อฟังปุ่มแบบ global และพิมพ์/วางข้อความ
         let opts = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(opts)
     }
@@ -751,22 +1037,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let lang = Settings.language
         hintItem.title = "Hold \(hk.title) to dictate"
 
-        for item in hotkeyMenu.items { item.state = (item.representedObject as? String) == hk.id ? .on : .off }
+        for item in hotkeyMenu.items where item.representedObject != nil {
+            item.state = (item.representedObject as? String) == hk.id ? .on : .off
+        }
         for item in languageMenu.items { item.state = (item.representedObject as? String) == lang.rawValue ? .on : .off }
-        liveItem.state = Settings.typeWhileSpeaking ? .on : .off
         if let autoItem = languageMenu.items.first(where: { ($0.representedObject as? String) == LanguageMode.auto.rawValue }) {
             autoItem.title = LanguageMode.auto.title
                 + (Settings.lastDetected.map { " — last: \(LanguageMode.name(of: $0))" } ?? "")
+        }
+        liveItem.state = Settings.typeWhileSpeaking ? .on : .off
+        autoPunctItem.state = Settings.autoPunctuation ? .on : .off
+        voiceCmdItem.state = Settings.voiceCommands ? .on : .off
+
+        switch LoginItem.status {
+        case .enabled: loginItem.state = .on; loginItem.title = "Launch at Login"
+        case .requiresApproval: loginItem.state = .mixed; loginItem.title = "Launch at Login (approve in Settings…)"
+        default: loginItem.state = .off; loginItem.title = "Launch at Login"
         }
 
         let speechOK = SFSpeechRecognizer.authorizationStatus() == .authorized
         let micOK = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let axOK = AXIsProcessTrusted()
-        let onDevice = Settings.candidates.allSatisfy {
-            SFSpeechRecognizer(locale: Locale(identifier: $0))?.supportsOnDeviceRecognition ?? false
-        }
         func mark(_ b: Bool) -> String { b ? "✓" : "✗" }
-        statusMenuItem.title = "\(onDevice ? "On-device" : "Apple servers") · Mic \(mark(micOK)) · Speech \(mark(speechOK)) · Accessibility \(mark(axOK))"
+        statusMenuItem.title = "Offline · Mic \(mark(micOK)) · Speech \(mark(speechOK)) · Accessibility \(mark(axOK))"
+
+        let missing = OnDevice.missing
+        modelItem.isHidden = missing.isEmpty
+        modelItem.title = "⚠︎ No on-device model for \(missing.map(LanguageMode.name(of:)).joined(separator: ", ")) — Open Dictation Settings…"
+        if dictator.state == .idle { setIcon(Settings.candidates.isEmpty ? .unavailable : .idle) }
     }
 
     @objc private func openAccessibility() {
@@ -777,21 +1075,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
     }
 
+    @objc private func openDictationSettings() {
+        // Keyboard → Dictation: เพิ่มภาษาเพื่อให้ macOS ดาวน์โหลดโมเดลบนเครื่อง
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!)
+    }
+
     // MARK: Hotkey
 
     private func installHotkey() {
-        if let g = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in
-            self?.handleFlags(e)
-        }) { monitors.append(g) }
-        if let l = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] e in
-            self?.handleFlags(e)
-            return e
-        }) { monitors.append(l) }
+        let flags: (NSEvent) -> Void = { [weak self] in self?.handleFlags($0) }
+        let keys: (NSEvent) -> Void = { [weak self] e in
+            if !SyntheticEvent.isOurs(e) { self?.otherKeyPressed() }
+        }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { flags($0); return $0 }) { monitors.append(m) }
+        if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: keys) { monitors.append(m) }
+        if let m = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { keys($0); return $0 }) { monitors.append(m) }
     }
 
     private func handleFlags(_ e: NSEvent) {
         let hk = Settings.hotkey
-        guard e.keyCode == hk.keyCode else { return }
+        guard e.keyCode == hk.keyCode else {
+            if keyIsDown { otherKeyPressed() } // กด modifier อื่นร่วม เช่น ⌥⇧
+            return
+        }
         let down = e.modifierFlags.rawValue & hk.mask != 0
         if down && !keyIsDown {
             keyIsDown = true
@@ -802,31 +1109,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// กดปุ่มอื่นขณะกดปุ่มพูดค้าง = ใช้เป็นคีย์ลัด (เช่น ⌥←, ⌘C) → ยกเลิก
+    /// ยกเลิกเฉพาะช่วงแรกและยังไม่ได้พิมพ์อะไร เพื่อไม่ให้การกดพลาดระหว่างพูดยาวทำให้ข้อความหาย
+    private func otherKeyPressed() {
+        guard keyIsDown, !cancelled, dictator.state == .recording,
+              Date().timeIntervalSince(pressedAt) < 1.0, typer?.typed.isEmpty ?? true else { return }
+        cancelled = true
+        dictator.cancel()
+        typer?.cancel()
+        typer = nil
+        overlay.hide()
+        setIcon(.idle)
+    }
+
     // MARK: Push-to-talk
 
     private func begin() {
+        cancelled = false
+        pressedAt = Date()
+        pressToken += 1
         typer = Settings.typeWhileSpeaking ? LiveTyper(output: KeyboardOutput()) : nil
         if dictator.start() {
-            setIcon("mic.fill")
-            overlay.show()
+            // แสดงผลหลังกดค้างครู่หนึ่ง — ไม่กะพริบตอนใช้ปุ่มเป็นคีย์ลัด
+            let token = pressToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + Config.overlayDelay) { [weak self] in
+                guard let self, token == self.pressToken, self.keyIsDown, !self.cancelled,
+                      self.dictator.state == .recording else { return }
+                self.setIcon(.listening)
+                self.overlay.show()
+            }
         } else {
             typer = nil
-            setIcon("mic.slash")
+            setIcon(.unavailable)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                if self?.dictator.state == .idle { self?.setIcon("mic") }
+                if self?.dictator.state == .idle { self?.updateStatus() }
             }
         }
     }
 
     private func end() {
         overlay.hide()
-        guard dictator.state == .recording else { return }
-        setIcon("ellipsis.circle")
+        guard !cancelled, dictator.state == .recording else { return }
+        setIcon(.processing)
         dictator.stop { [weak self] text in
             guard let self else { return }
-            self.setIcon("mic")
+            self.setIcon(.idle)
             self.updateStatus()
-            let final = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let final = VoiceCommands.apply(text.trimmingCharacters(in: .whitespacesAndNewlines))
             if let typer = self.typer {
                 // แก้ส่วนท้ายที่ต่างจากผลสุดท้าย (หรือแทนทั้งหมดถ้าโหมดอัตโนมัติเปลี่ยนภาษา)
                 typer.finish(final)
@@ -837,10 +1166,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func setIcon(_ symbol: String) {
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: "MacPTTT")
-        img?.isTemplate = true
-        statusItem.button?.image = img
+    private func setIcon(_ icon: MenuBarIcon) {
+        statusItem.button?.image = icon.image
     }
 }
 
