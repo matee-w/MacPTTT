@@ -9,7 +9,7 @@ Push-to-talk dictation for the macOS menu bar, in Thai and English. Hold a key a
 ## Features
 - **Push-to-talk** with a key you choose: Left Option by default, or any left- or right-hand modifier
 - **Types while you speak**, word by word, and corrects the tail to the final result when you release the key
-- **Punctuation**: automatic, plus spoken commands ("comma", "new line", Thai "ขึ้นบรรทัด", "ไม้ยมก", …)
+- **Punctuation**: automatic, plus spoken commands ("comma", "new line", Thai "ย่อหน้าใหม่", "ไม้ยมก", …)
 - **Automatic language selection** between Thai and English, or a fixed language
 - **Offline**: on-device speech models only, never Apple's servers
 - **Live waveform** of the microphone at the bottom-center of the screen while you speak
@@ -62,19 +62,19 @@ Menu bar icon (a speech bubble turning sound into text): outline = ready · fill
 
 | Say | Inserts |
 |---|---|
-| ขึ้นบรรทัด | new line |
-| ย่อหน้าใหม่ | new paragraph |
-| วรรค | space |
-| ไม้ยมก | ๆ |
-| ไปยาลน้อย | ฯ |
-| จุลภาค | , |
-| มหัพภาค / เครื่องหมายจุด | . |
 | เครื่องหมายคำถาม | ? |
 | เครื่องหมายตกใจ | ! |
-| เปิดวงเล็บ / ปิดวงเล็บ | ( ) |
-| เปิดอัญประกาศ / ปิดอัญประกาศ | “ ” |
+| เครื่องหมายจุด / มหัพภาค | . |
+| เครื่องหมายคำพูดเปิด / เครื่องหมายคำพูดปิด | “ ” |
+| ขึ้นบรรทัดใหม่ | new line |
+| ย่อหน้าใหม่ | new paragraph |
+| ไปยาลน้อย | ฯ |
+| วงเล็บเปิด / วงเล็บปิด | ( ) |
+| ไม้ยมก | ๆ |
+| จุลภาค | , |
+| เว้นวรรค | space |
 
-The Thai recognizer drops the words "เว้นวรรค" and "บรรทัดใหม่" itself, so use "วรรค" and "ขึ้นบรรทัด" instead. "วรรค" is short and is sometimes dropped too.
+macOS already converts "เครื่องหมายคำถาม", "เครื่องหมายตกใจ" and "วงเล็บเปิด/ปิด" itself. The Thai recognizer often drops the words "บรรทัดใหม่" before MacPTTT sees them, so "ขึ้นบรรทัดใหม่" may not work; use "ย่อหน้าใหม่" for a line break if it does not.
 
 ## Offline (on-device models)
 MacPTTT only uses the speech models stored on the Mac. It never falls back to Apple's servers, so it works without internet. If a language has no on-device model, the menu shows **⚠︎ No on-device model for …**. Click it and add the language under **Keyboard → Dictation** so macOS downloads the model.

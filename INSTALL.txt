@@ -26,7 +26,7 @@ Hold Left Option (change it in menu > Push-to-Talk Key) and speak. The text
 is typed at the cursor as you talk; release the key when you are done.
 A waveform shows at the bottom of the screen while you speak.
 Language: menu > Language (Automatic, Thai, English).
-Punctuation: automatic, or say e.g. "comma", "new line" / Thai "ขึ้นบรรทัด",
+Punctuation: automatic, or say e.g. "comma", "new line" / Thai "ย่อหน้าใหม่",
 "ไม้ยมก" (menu > Punctuation > Show Voice Commands).
 MacPTTT starts automatically at login (menu > Launch at Login).
 
