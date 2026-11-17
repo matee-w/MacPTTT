@@ -107,13 +107,20 @@ enum Settings {
         set { d.set(newValue, forKey: "voiceCommands") }
     }
 
+    /// ภาษาที่ไม่มีโมเดลบนเครื่อง (เช่น macOS รุ่นเก่าที่ไม่มีโมเดลภาษาไทย) ให้ส่งเสียงไปถอดความที่เซิร์ฟเวอร์ Apple
+    /// ปิดไว้เป็นค่าเริ่มต้น — เปิดแล้วต้องต่อเน็ต และเสียงจะถูกส่งออกจากเครื่อง
+    static var allowCloud: Bool {
+        get { d.bool(forKey: "allowCloud") }
+        set { d.set(newValue, forKey: "allowCloud") }
+    }
+
     /// ตั้งค่าเปิดเมื่อ login แล้วหรือยัง (ทำครั้งแรกครั้งเดียว ต่อจากนั้นตามที่ผู้ใช้เลือก)
     static var didSetUpLoginItem: Bool {
         get { d.bool(forKey: "didSetUpLoginItem") }
         set { d.set(newValue, forKey: "didSetUpLoginItem") }
     }
 
-    /// รายการภาษาที่จะลอง เรียงตามลำดับ — เฉพาะภาษาที่มีโมเดลบนเครื่อง (ทำงานแบบ offline เท่านั้น)
+    /// รายการภาษาที่จะลอง เรียงตามลำดับ — ภาษาที่มีโมเดลบนเครื่อง และภาษาที่ใช้ cloud ได้ (ถ้าเปิดไว้)
     static var candidates: [String] {
         switch language {
         case .auto:
@@ -127,17 +134,32 @@ enum Settings {
     }
 }
 
-/// ใช้เฉพาะโมเดลบนเครื่อง — ไม่ส่งเสียงออกไปที่เซิร์ฟเวอร์ และไม่ต้องต่อเน็ต
+/// เลือกว่าแต่ละภาษาถอดความที่ไหน: ใช้โมเดลบนเครื่องเสมอถ้ามี (ไม่ต้องต่อเน็ต เสียงไม่ออกจากเครื่อง)
+/// ถ้าไม่มีโมเดลบนเครื่อง จะใช้เซิร์ฟเวอร์ Apple ได้เฉพาะเมื่อผู้ใช้เปิด Settings.allowCloud
 enum OnDevice {
-    static func isAvailable(_ localeID: String) -> Bool {
+    static func hasModel(_ localeID: String) -> Bool {
         SFSpeechRecognizer(locale: Locale(identifier: localeID))?.supportsOnDeviceRecognition ?? false
     }
 
-    /// ภาษาที่เลือกไว้แต่ยังไม่มีโมเดลบนเครื่อง
-    static var missing: [String] {
-        let wanted = Settings.language == .auto ? LanguageMode.autoCandidates : [Settings.language.rawValue]
-        return wanted.filter { !isAvailable($0) }
+    /// ภาษานี้ใช้ถอดความได้ตอนนี้ไหม (บนเครื่อง หรือผ่าน cloud ที่อนุญาตไว้และเซิร์ฟเวอร์พร้อม)
+    static func isAvailable(_ localeID: String) -> Bool {
+        hasModel(localeID) || usesCloud(localeID)
     }
+
+    /// ภาษานี้จะถูกส่งไปถอดความที่เซิร์ฟเวอร์ Apple
+    static func usesCloud(_ localeID: String) -> Bool {
+        guard Settings.allowCloud, !hasModel(localeID),
+              let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)) else { return false }
+        return r.isAvailable // false เมื่อไม่มีเน็ต
+    }
+
+    /// ภาษาที่เลือกไว้
+    static var wanted: [String] {
+        Settings.language == .auto ? LanguageMode.autoCandidates : [Settings.language.rawValue]
+    }
+
+    /// ภาษาที่เลือกไว้แต่ยังไม่มีโมเดลบนเครื่อง
+    static var missing: [String] { wanted.filter { !hasModel($0) } }
 }
 
 // MARK: - Voice commands (เครื่องหมายวรรคตอนด้วยเสียง)
@@ -255,14 +277,15 @@ final class RecognitionPass {
     }
 
     init?(localeID: String) {
-        // ใช้เฉพาะโมเดลบนเครื่อง: ไม่ต้องต่อเน็ต และเสียงไม่ถูกส่งออกไป — ไม่มีโมเดล = ไม่ทำงาน (ไม่ fallback ไปเซิร์ฟเวอร์)
-        guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)),
-              r.supportsOnDeviceRecognition else { return nil }
+        // มีโมเดลบนเครื่อง = ใช้บนเครื่องเท่านั้น · ไม่มี = ใช้เซิร์ฟเวอร์ Apple เฉพาะเมื่อผู้ใช้เปิด allowCloud
+        guard let r = SFSpeechRecognizer(locale: Locale(identifier: localeID)) else { return nil }
+        let onDevice = r.supportsOnDeviceRecognition
+        guard onDevice || OnDevice.usesCloud(localeID) else { return nil }
         self.localeID = localeID
         recognizer = r
 
         request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
+        request.requiresOnDeviceRecognition = onDevice
         if #available(macOS 13.0, *) { request.addsPunctuation = Settings.autoPunctuation }
 
         task = r.recognitionTask(with: request) { [weak self] result, error in
@@ -896,6 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let autoPunctItem = NSMenuItem(title: "Automatic Punctuation", action: nil, keyEquivalent: "")
     private let voiceCmdItem = NSMenuItem(title: "Thai Voice Commands", action: nil, keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
+    private let cloudItem = NSMenuItem(title: "Use Apple Servers When No On-Device Model", action: nil, keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -948,6 +972,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             languageMenu.addItem(item(mode.title, #selector(selectLanguage(_:)), mode.rawValue))
             if mode == .auto { languageMenu.addItem(.separator()) }
         }
+        languageMenu.addItem(.separator())
+        cloudItem.target = self
+        cloudItem.action = #selector(toggleCloud)
+        languageMenu.addItem(cloudItem)
         let languageItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         languageItem.submenu = languageMenu
         menu.addItem(languageItem)
@@ -982,6 +1010,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleLiveTyping() { Settings.typeWhileSpeaking.toggle(); updateStatus() }
     @objc private func toggleAutoPunctuation() { Settings.autoPunctuation.toggle(); updateStatus() }
     @objc private func toggleVoiceCommands() { Settings.voiceCommands.toggle(); updateStatus() }
+
+    @objc private func toggleCloud() {
+        if !Settings.allowCloud {
+            let alert = NSAlert()
+            alert.messageText = "Use Apple servers for speech recognition?"
+            alert.informativeText = """
+                Only for languages without an on-device model on this Mac (for example Thai on older macOS). \
+                Your voice is sent to Apple to be transcribed, and an internet connection is required. \
+                Languages with an on-device model always stay offline.
+                """
+            alert.addButton(withTitle: "Use Apple Servers")
+            alert.addButton(withTitle: "Cancel")
+            NSApp.activate(ignoringOtherApps: true)
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        Settings.allowCloud.toggle()
+        updateStatus()
+    }
 
     @objc private func toggleLogin() {
         switch LoginItem.status {
@@ -1047,7 +1093,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in hotkeyMenu.items where item.representedObject != nil {
             item.state = (item.representedObject as? String) == hk.id ? .on : .off
         }
-        for item in languageMenu.items { item.state = (item.representedObject as? String) == lang.rawValue ? .on : .off }
+        for item in languageMenu.items where item.representedObject != nil { item.state = (item.representedObject as? String) == lang.rawValue ? .on : .off }
         if let autoItem = languageMenu.items.first(where: { ($0.representedObject as? String) == LanguageMode.auto.rawValue }) {
             autoItem.title = LanguageMode.auto.title
                 + (Settings.lastDetected.map { " — last: \(LanguageMode.name(of: $0))" } ?? "")
@@ -1055,6 +1101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         liveItem.state = Settings.typeWhileSpeaking ? .on : .off
         autoPunctItem.state = Settings.autoPunctuation ? .on : .off
         voiceCmdItem.state = Settings.voiceCommands ? .on : .off
+        cloudItem.state = Settings.allowCloud ? .on : .off
 
         switch LoginItem.status {
         case .enabled: loginItem.state = .on; loginItem.title = "Launch at Login"
@@ -1066,11 +1113,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let micOK = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let axOK = AXIsProcessTrusted()
         func mark(_ b: Bool) -> String { b ? "✓" : "✗" }
-        statusMenuItem.title = "Offline · Mic \(mark(micOK)) · Speech \(mark(speechOK)) · Accessibility \(mark(axOK))"
+        let cloud = OnDevice.wanted.filter(OnDevice.usesCloud)
+        let mode = cloud.isEmpty ? "Offline" : "Cloud: \(cloud.map(LanguageMode.name(of:)).joined(separator: ", "))"
+        statusMenuItem.title = "\(mode) · Mic \(mark(micOK)) · Speech \(mark(speechOK)) · Accessibility \(mark(axOK))"
 
-        let missing = OnDevice.missing
+        let missing = OnDevice.missing.filter { !cloud.contains($0) }
         modelItem.isHidden = missing.isEmpty
-        modelItem.title = "⚠︎ No on-device model for \(missing.map(LanguageMode.name(of:)).joined(separator: ", ")) — Open Dictation Settings…"
+        let names = missing.map(LanguageMode.name(of:)).joined(separator: ", ")
+        modelItem.title = Settings.allowCloud
+            ? "⚠︎ \(names): no on-device model and Apple servers unreachable — Open Dictation Settings…"
+            : "⚠︎ No on-device model for \(names) — Open Dictation Settings…"
         if dictator.state == .idle { setIcon(Settings.candidates.isEmpty ? .unavailable : .idle) }
     }
 

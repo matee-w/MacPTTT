@@ -31,6 +31,9 @@ Punctuation: automatic, or say e.g. "comma", "new line" / Thai "ย่อหน�
 MacPTTT starts automatically at login (menu > Launch at Login).
 
 OFFLINE
-MacPTTT only uses on-device speech models and works without internet.
+By default MacPTTT only uses on-device speech models and works without internet.
 If the menu shows "No on-device model", add Thai/English in
 System Settings > Keyboard > Dictation so macOS downloads the model.
+On older macOS with no on-device Thai model, turn on
+Language > Use Apple Servers When No On-Device Model.
+This sends your voice to Apple and needs an internet connection.

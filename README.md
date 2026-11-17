@@ -4,14 +4,14 @@
 
 **English** · [ภาษาไทย](README.th.md)
 
-Push-to-talk dictation for the macOS menu bar, in Thai and English. Hold a key and speak: the text is typed at the cursor as you talk, in whatever app you are using. It uses Apple's built-in Speech framework (`SFSpeechRecognizer`) **on-device only**, so it works offline and no audio leaves your Mac. No start/stop sounds.
+Push-to-talk dictation for the macOS menu bar, in Thai and English. Hold a key and speak: the text is typed at the cursor as you talk, in whatever app you are using. It uses Apple's built-in Speech framework (`SFSpeechRecognizer`) **on-device by default**, so it works offline and no audio leaves your Mac. On older macOS without an on-device Thai model, you can choose to use Apple's servers instead. No start/stop sounds.
 
 ## Features
 - **Push-to-talk** with a key you choose: Left Option by default, or any left- or right-hand modifier
 - **Types while you speak**, word by word, and corrects the tail to the final result when you release the key
 - **Punctuation**: automatic, plus spoken commands ("comma", "new line", Thai "ย่อหน้าใหม่", "ไม้ยมก", …)
 - **Automatic language selection** between Thai and English, or a fixed language
-- **Offline**: on-device speech models only, never Apple's servers
+- **Offline by default**: on-device speech models; Apple's servers only if you turn that on for languages with no on-device model
 - **Live waveform** of the microphone at the bottom-center of the screen while you speak
 - **Launches at login**
 
@@ -30,7 +30,7 @@ Requires macOS 13 or later. Universal app (Apple Silicon and Intel).
 2. **Accessibility**: System Settings → Privacy & Security → Accessibility → turn on MacPTTT. This lets the app listen for the push-to-talk key in other apps and type or paste the text.
 3. **Quit and reopen MacPTTT** after granting Accessibility. The global key monitor only starts at launch.
 
-The second line of the menu shows the current state, e.g. `Offline · Mic ✓ · Speech ✓ · Accessibility ✓`.
+The second line of the menu shows the current state, e.g. `Offline · Mic ✓ · Speech ✓ · Accessibility ✓` (or `Cloud: Thai · …` when a language is using Apple's servers).
 
 ## Usage
 Hold the push-to-talk key → speak (words appear at the cursor about half a second after you say them) → release.
@@ -76,7 +76,13 @@ Menu bar icon (a speech bubble turning sound into text): outline = ready · fill
 macOS already converts "เครื่องหมายคำถาม", "เครื่องหมายตกใจ" and "วงเล็บเปิด/ปิด" itself.
 
 ## Offline (on-device models)
-MacPTTT only uses the speech models stored on the Mac. It never falls back to Apple's servers, so it works without internet. If a language has no on-device model, the menu shows **⚠︎ No on-device model for …**. Click it and add the language under **Keyboard → Dictation** so macOS downloads the model.
+By default MacPTTT only uses the speech models stored on the Mac, so it works without internet and no audio leaves your Mac. If a language has no on-device model, the menu shows **⚠︎ No on-device model for …**. Click it and add the language under **Keyboard → Dictation** so macOS downloads the model.
+
+### Older macOS without an on-device Thai model
+Some older macOS versions have no on-device model for Thai. Turn on **Language → Use Apple Servers When No On-Device Model** to transcribe those languages on Apple's servers instead. MacPTTT asks you to confirm first.
+- Only languages without an on-device model use the servers. Languages that have one still run offline.
+- It needs an internet connection, and your voice is sent to Apple.
+- The status line shows `Cloud: Thai` while it is in use.
 
 ## Build from source
 Needs Xcode or the Command Line Tools (`xcode-select --install`).
